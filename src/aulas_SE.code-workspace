@@ -1,0 +1,14 @@
+{
+	"folders": [
+		{
+			"path": "../../../../../Downloads/aulas_SE"
+		},
+		{
+			"name": "aulas_SE",
+			"path": ".."
+		}
+	],
+	"settings": {
+		"git.ignoreLimitWarning": true
+	}
+}
