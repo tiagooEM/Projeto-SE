@@ -1,54 +1,93 @@
 #include <Arduino.h>
-#include <Wire.h>
-#include <Adafruit_MPU6050.h>
-#include <Adafruit_Sensor.h>
+#include <math.h>
 
-Adafruit_MPU6050 mpu;
+#define SCT_PIN 34
 
-// estrutura compartilhada
+// ADC ESP32
+#define ADC_RESOLUTION 4095.0
+#define ADC_VREF 3.3
+
+// Offset criado pelo divisor
+#define ADC_OFFSET 1.65
+
+// Quantidade de amostras
+#define NUM_SAMPLES 1000
+
+// Sensibilidade aproximada SCT-013 20A/1V
+#define SCT_SCALE 20.0
+
+// Limite para detectar energia
+#define CURRENT_THRESHOLD 0.15
+
+QueueHandle_t currentQueue;
+
 typedef struct {
-    float x;
-    float y;
-    float z;
-} AccelData;
+    float current;
+} CurrentData;
 
-QueueHandle_t accelQueue;
 
-// ---------- TASK 1 ----------
-void taskReadSensor(void *pvParameters) {
+float readCurrentRMS() {
 
-    sensors_event_t a, g, temp;
-    AccelData data;
+    double sumSquares = 0;
 
-    while(true) {
+    for (int i = 0; i < NUM_SAMPLES; i++) {
 
-        mpu.getEvent(&a, &g, &temp);
+        int adc = analogRead(SCT_PIN);
 
-        data.x = a.acceleration.x;
-        data.y = a.acceleration.y;
-        data.z = a.acceleration.z;
+        float voltage = (adc * ADC_VREF) / ADC_RESOLUTION;
 
-        xQueueSend(accelQueue, &data, portMAX_DELAY);
+        float centered = voltage - ADC_OFFSET;
 
-        vTaskDelay(pdMS_TO_TICKS(200));
+        sumSquares += centered * centered;
+
+        delayMicroseconds(200);
+    }
+
+    float rmsVoltage = sqrt(sumSquares / NUM_SAMPLES);
+
+    float current = rmsVoltage * SCT_SCALE;
+
+    return abs(current);
+}
+
+void taskReadCurrent(void *pvParameters) {
+
+    CurrentData data;
+
+    while (true) {
+
+        data.current = readCurrentRMS();
+
+        xQueueSend(currentQueue, &data, portMAX_DELAY);
+
+        vTaskDelay(pdMS_TO_TICKS(1000));
     }
 }
 
-// ---------- TASK 2 ----------
-void taskProcessData(void *pvParameters) {
 
-    AccelData received;
+void taskDetectPower(void *pvParameters) {
 
-    while(true) {
+    CurrentData received;
 
-        if(xQueueReceive(accelQueue, &received, portMAX_DELAY)) {
+    while (true) {
 
-            Serial.print("X: ");
-            Serial.print(received.x);
-            Serial.print(" Y: ");
-            Serial.print(received.y);
-            Serial.print(" Z: ");
-            Serial.println(received.z);
+        if (xQueueReceive(currentQueue, &received, portMAX_DELAY)) {
+
+            Serial.print("Corrente RMS: ");
+            Serial.print(received.current);
+            Serial.println(" A");
+
+            // DETECÇÃO
+            if (received.current < CURRENT_THRESHOLD) {
+
+                Serial.println("⚠ POSSIVEL CORTE DE ENERGIA!");
+
+            } else {
+
+                Serial.println("✅ Energia OK");
+            }
+
+            Serial.println("-------------------------");
         }
     }
 }
@@ -56,36 +95,33 @@ void taskProcessData(void *pvParameters) {
 void setup() {
 
     Serial.begin(115200);
-    Wire.begin(21,22);
 
-    if(!mpu.begin()) {
-        Serial.println("MPU6050 nao encontrado");
-        while(true);
-    }
+    analogReadResolution(12);
 
-    accelQueue = xQueueCreate(10, sizeof(AccelData));
+    analogSetAttenuation(ADC_11db);
 
-    // Task leitura - Core 0
+    currentQueue = xQueueCreate(5, sizeof(CurrentData));
+
     xTaskCreatePinnedToCore(
-        taskReadSensor,
-        "ReadSensor",
+        taskReadCurrent,
+        "ReadCurrent",
         4096,
         NULL,
         1,
         NULL,
-        0);
+        0
+    );
 
-    // Task processamento - Core 1
     xTaskCreatePinnedToCore(
-        taskProcessData,
-        "ProcessData",
+        taskDetectPower,
+        "DetectPower",
         4096,
         NULL,
         1,
         NULL,
-        1);
+        1
+    );
 }
 
 void loop() {
-    // vazio (FreeRTOS controla tudo)
 }
