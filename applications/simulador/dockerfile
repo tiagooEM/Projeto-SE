@@ -11,4 +11,4 @@ RUN pip install paho-mqtt
 COPY simulador.py .
 
 # Executa o script
-CMD ["python", "-u", "simulador.py"]
+CMD ["python", "-u", "simulador.py"]w
