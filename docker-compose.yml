@@ -1,23 +1,45 @@
 version: '3.8'
 
 services:
+  # 1. Broker MQTT
   mosquitto:
     image: eclipse-mosquitto:latest
     container_name: powerguard-mosquitto
     ports:
-      - "1883:1883"
-      - "9002:9001"
+      - "1883:1883" 
+      - "9002:9001" 
     volumes:
       - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
     restart: always
 
+  # 2. Simulador Python do ESP32
+  simulador:
+    build: ./applications/simulador
+    container_name: powerguard-simulador
+    depends_on:
+      - mosquitto
+    restart: always
+
+  # 3. Backend (Node-RED - Mantido caso queira usar futuramente)
   node-red:
     image: nodered/node-red:latest
     container_name: powerguard-nodered
     ports:
-      - "1880:1880" # Porta padrão para acessar o Node-RED no navegador
+      - "1880:1880"
     volumes:
-      - node-red-data:/data # Garante que seus fluxos e dashboards fiquem salvos permanentemente
+      - node-red-data:/data
+    depends_on:
+      - mosquitto
+    restart: always
+
+  # 4. Dashboard Web em React
+  frontend:
+    build: ./applications/frontend
+    container_name: powerguard-react
+    ports:
+      - "5173:5173" 
+    volumes:
+      - ./applications/frontend/src:/app/src 
     depends_on:
       - mosquitto
     restart: always

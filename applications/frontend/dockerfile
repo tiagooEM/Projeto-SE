@@ -1,0 +1,18 @@
+# Usa uma imagem oficial do Node leve
+FROM node:18-alpine
+
+# Define o diretório de trabalho no contêiner
+WORKDIR /app
+
+# Copia os arquivos de dependência e instala
+COPY package*.json ./
+RUN npm install
+
+# Copia o resto do código
+COPY . .
+
+# Expõe a porta que o Vite usa
+EXPOSE 5173
+
+# Comando para iniciar o servidor de desenvolvimento e liberar acesso externo
+CMD ["npm", "run", "dev", "--", "--host"]

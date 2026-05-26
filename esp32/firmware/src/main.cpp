@@ -23,7 +23,7 @@ PubSubClient client(espClient);
 
 // ---------------- FILAS DO FREERTOS ----------------------
 QueueHandle_t currentQueue;
-QueueHandle_t mqttQueue; // Fila separada para enviar dados ao MQTT
+QueueHandle_t mqttQueue;
 
 typedef struct {
     float current;
@@ -47,7 +47,7 @@ float readCurrentRMS() {
 
 // ---------------- TAREFAS (TASKS) ------------------------
 
-// Task 1: Lê o sensor continuamente
+// Task 1: Lê o sensor continuamente (AGORA NO CORE 1)
 void taskReadCurrent(void *pvParameters) {
     SensorData data;
     while (true) {
@@ -57,7 +57,7 @@ void taskReadCurrent(void *pvParameters) {
     }
 }
 
-// Task 2: Analisa os dados
+// Task 2: Analisa os dados (AGORA NO CORE 1)
 void taskDetectPower(void *pvParameters) {
     SensorData received;
     while (true) {
@@ -76,19 +76,17 @@ void taskDetectPower(void *pvParameters) {
             }
             Serial.println("-------------------------");
 
-            // Envia os dados já processados para a fila do MQTT
             xQueueSend(mqttQueue, &received, portMAX_DELAY);
         }
     }
 }
 
-// Task 3: Gerencia o Wi-Fi e publica no MQTT
+// Task 3: Gerencia o Wi-Fi e publica no MQTT (AGORA NO CORE 0)
 void taskMQTT(void *pvParameters) {
     SensorData dataToSend;
     char jsonBuffer[100];
 
     while (true) {
-        // Garante a conexão Wi-Fi
         if (WiFi.status() != WL_CONNECTED) {
             Serial.print("Conectando ao WiFi...");
             WiFi.begin(ssid, password);
@@ -99,7 +97,6 @@ void taskMQTT(void *pvParameters) {
             Serial.println("\nWiFi Conectado!");
         }
 
-        // Garante a conexão MQTT
         if (!client.connected()) {
             Serial.print("Conectando ao Broker MQTT...");
             String clientId = "ESP32-PowerGuard-" + String(random(0xffff), HEX);
@@ -109,13 +106,12 @@ void taskMQTT(void *pvParameters) {
                 Serial.print(" Falha. Código: ");
                 Serial.println(client.state());
                 vTaskDelay(pdMS_TO_TICKS(5000));
-                continue; // Volta para o início do loop para tentar novamente
+                continue; 
             }
         }
         
         client.loop();
 
-        // Se houver dados na fila, publica no tópico
         if (xQueueReceive(mqttQueue, &dataToSend, pdMS_TO_TICKS(100))) {
             snprintf(jsonBuffer, sizeof(jsonBuffer), "{\"corrente\": %.2f, \"status\": \"%s\"}", 
                      dataToSend.current, dataToSend.status);
@@ -125,7 +121,7 @@ void taskMQTT(void *pvParameters) {
             Serial.println(jsonBuffer);
         }
         
-        vTaskDelay(pdMS_TO_TICKS(10)); // Evita travamento da task
+        vTaskDelay(pdMS_TO_TICKS(10)); 
     }
 }
 
@@ -134,23 +130,19 @@ void taskMQTT(void *pvParameters) {
 void setup() {
     Serial.begin(115200);
 
-    // Configuração do ADC
     analogReadResolution(12);
     analogSetAttenuation(ADC_11db);
 
-    // Configuração do MQTT
     client.setServer(mqtt_server, mqtt_port);
 
-    // Criação das Filas
     currentQueue = xQueueCreate(5, sizeof(SensorData));
     mqttQueue = xQueueCreate(5, sizeof(SensorData));
 
-    // Inicialização das Tasks
-    xTaskCreatePinnedToCore(taskReadCurrent, "ReadCurrent", 4096, NULL, 1, NULL, 0);
-    xTaskCreatePinnedToCore(taskDetectPower, "DetectPower", 4096, NULL, 1, NULL, 0);
-    xTaskCreatePinnedToCore(taskMQTT, "TaskMQTT", 4096, NULL, 1, NULL, 1); // Roda no Core 1 (rede)
+    // Inicialização das Tasks com a alocação de núcleos invertida
+    xTaskCreatePinnedToCore(taskReadCurrent, "ReadCurrent", 4096, NULL, 1, NULL, 1); // Core 1 (APP_CPU)
+    xTaskCreatePinnedToCore(taskDetectPower, "DetectPower", 4096, NULL, 1, NULL, 1); // Core 1 (APP_CPU)
+    xTaskCreatePinnedToCore(taskMQTT, "TaskMQTT", 4096, NULL, 1, NULL, 0);           // Core 0 (PRO_CPU)
 }
 
 void loop() {
-    // O loop fica vazio. O FreeRTOS gerencia tudo através das Tasks.
 }
