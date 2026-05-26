@@ -1,0 +1,51 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Dashboard - PowerGuard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.4/socket.io.min.js"></script>
+  <style>body{font-family:Arial;margin:20px;} #status{margin-bottom:10px}</style>
+</head>
+<body>
+  <h2>PowerGuard — Dashboard</h2>
+  <div id="status">Conectando...</div>
+  <canvas id="chart" width="800" height="300"></canvas>
+
+  <script>
+    const socket = io();
+    const statusEl = document.getElementById('status');
+
+    const ctx = document.getElementById('chart').getContext('2d');
+    const data = {
+      labels: [],
+      datasets: [{
+        label: 'Corrente (A)',
+        backgroundColor: 'rgba(54,162,235,0.2)',
+        borderColor: 'rgba(54,162,235,1)',
+        data: []
+      }]
+    };
+    const chart = new Chart(ctx, { type: 'line', data: data, options: { animation: false } });
+
+    socket.on('connect', () => { statusEl.textContent = 'Conectado ao backend'; });
+    socket.on('disconnect', () => { statusEl.textContent = 'Desconectado'; });
+
+    socket.on('sensor_data', (payload) => {
+      const now = new Date().toLocaleTimeString();
+      let value = null;
+      if (payload.corrente !== undefined) value = parseFloat(payload.corrente);
+      else if (payload.current !== undefined) value = parseFloat(payload.current);
+      else if (payload.raw) value = null;
+
+      statusEl.textContent = 'Status: ' + (payload.status || payload.estado || 'n/a');
+
+      data.labels.push(now);
+      data.datasets[0].data.push(value);
+
+      if (data.labels.length > 60) { data.labels.shift(); data.datasets[0].data.shift(); }
+      chart.update();
+    });
+  </script>
+</body>
+</html>

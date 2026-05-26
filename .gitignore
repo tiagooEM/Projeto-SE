@@ -1,0 +1,45 @@
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# Environment variables
+.env
+.env.local
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# PlatformIO
+.pio/
+.platformio/
+build/
+.clang_complete
+.gcc-flags.json
+
+# Temporary files
+*.log
+*.tmp
+*.bak
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node.js (Node-RED, etc)
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Docker
+*.log
