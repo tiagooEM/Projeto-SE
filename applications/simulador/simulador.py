@@ -2,25 +2,33 @@ import time
 import json
 import random
 import paho.mqtt.client as mqtt
+from influxdb_client import InfluxDBClient, Point, WritePrecision
+from influxdb_client.client.write_api import SYNCHRONOUS
 
-# Aponta para o nome do contêiner do broker no Docker Compose
-BROKER = "mosquitto" 
+# Configurações de Rede Interna do Docker
+BROKER = "mosquitto"
 PORT = 1883
 TOPIC = "powerguard/sensores"
 
-client = mqtt.Client(client_id="PowerGuard-Python", protocol=mqtt.MQTTv311)
+INFLUX_URL = "http://influxdb:8086"
+INFLUX_TOKEN = "my-super-secret-token-123"
+INFLUX_ORG = "cesar"
+INFLUX_BUCKET = "telemetria_energia"
 
-print("Tentando conectar ao broker Mosquitto...")
-while True:
-    try:
-        client.connect(BROKER, PORT, 60)
-        break
-    except Exception as e:
-        print("Aguardando o broker iniciar...")
-        time.sleep(2)
+# Inicialização e conexões com tratamento de erro
+print("Aguardando inicialização dos serviços do ecossistema...")
+time.sleep(5)
 
-client.loop_start()
-print("🔌 Simulador PowerGuard iniciado. Enviando dados...")
+# Conexão InfluxDB
+influx_client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG)
+write_api = influx_client.write_api(write_options=SYNCHRONOUS)
+
+# Conexão MQTT
+mqtt_client = mqtt.Client(client_id="PowerGuard-Core", protocol=mqtt.MQTTv311)
+mqtt_client.connect(BROKER, PORT, 60)
+mqtt_client.loop_start()
+
+print("🔌 Conectado ao Broker e ao InfluxDB. Monitoramento iniciado.")
 
 try:
     while True:
@@ -31,14 +39,24 @@ try:
             corrente = round(random.uniform(0.0, 0.1), 2)
             status = "corte"
 
+        # 1. Envio em tempo real para o Frontend (MQTT)
         payload = json.dumps({"corrente": corrente, "status": status})
+        mqtt_client.publish(TOPIC, payload)
+        print(f"[MQTT Out] Publicado: {payload}")
+
+        # 2. Persistência Histórica no Banco de Dados (InfluxDB)
+        ponto = Point("leitura_corrente") \
+            .tag("dispositivo", "esp32_sala_infra") \
+            .field("corrente_rms", corrente) \
+            .field("status_rede", status) \
+            .time(time.time_ns(), WritePrecision.NS)
         
-        client.publish(TOPIC, payload)
-        print(f"Enviado: {payload}")
-        
+        write_api.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=ponto)
+        print(f"[DB Influx] Registro persistido com sucesso.")
+
         time.sleep(2)
 
 except KeyboardInterrupt:
-    print("\nSimulação encerrada.")
-    client.loop_stop()
-    client.disconnect()
+    print("\nEncerrando serviços...")
+    mqtt_client.loop_stop()
+    influx_client.close()

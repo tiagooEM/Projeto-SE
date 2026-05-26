@@ -1,14 +1,10 @@
-# Usa uma versão leve do Python
 FROM python:3.10-slim
 
-# Define a pasta de trabalho no contêiner
 WORKDIR /app
 
-# Instala a biblioteca MQTT
-RUN pip install paho-mqtt
+# Instala o cliente MQTT e o cliente do InfluxDB
+RUN pip install paho-mqtt influxdb-client
 
-# Copia o seu script para dentro do contêiner
 COPY simulador.py .
 
-# Executa o script
-CMD ["python", "-u", "simulador.py"]w
+CMD python -u simulador.py

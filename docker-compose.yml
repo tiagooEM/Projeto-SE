@@ -1,0 +1,52 @@
+services:
+  # 1. Broker MQTT
+  mosquitto:
+    image: eclipse-mosquitto:latest
+    container_name: powerguard-mosquitto
+    ports:
+      - "1883:1883"
+      - "9002:9001"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
+    restart: always
+
+  # 2. Banco de Dados de Séries Temporais
+  influxdb:
+    image: influxdb:2.7
+    container_name: powerguard-influxdb
+    ports:
+      - "8086:8086" # Interface visual do InfluxDB
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=powerguard1234
+      - DOCKER_INFLUXDB_INIT_ORG=cesar
+      - DOCKER_INFLUXDB_INIT_BUCKET=telemetria_energia
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=my-super-secret-token-123
+    volumes:
+      - influxdb-data:/var/lib/influxdb2
+    restart: always
+
+  # 3. Simulador Python (Atualizado para gravar no Banco)
+  simulador:
+    build: ./applications/simulador
+    container_name: powerguard-simulador
+    depends_on:
+      - mosquitto
+      - influxdb
+    restart: always
+
+  # 4. Dashboard Web em React
+  frontend:
+    build: ./applications/frontend
+    container_name: powerguard-react
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./applications/frontend/src:/app/src
+    depends_on:
+      - mosquitto
+    restart: always
+
+volumes:
+  influxdb-data:
