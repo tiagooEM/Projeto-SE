@@ -7,15 +7,16 @@
 #define SCT_PIN 34
 #define ADC_RESOLUTION 4095.0
 #define ADC_VREF 3.3
-#define ADC_OFFSET 1.65
 #define NUM_SAMPLES 1000
 #define SCT_SCALE 20.0
 #define CURRENT_THRESHOLD 0.15
 
+float ADC_OFFSET = 1.65; // Será calibrado no setup
+
 // ---------------- CONFIGURAÇÕES REDE E MQTT --------------
-const char* ssid = "SEU_NOME_DA_REDE_WIFI";
-const char* password = "SUA_SENHA_WIFI";
-const char* mqtt_server = "IP_DO_SEU_BROKER_OU_RASPBERRY";
+const char* ssid = "uaifai-tiradentes";
+const char* password = "bemvindoaocesar";
+const char* mqtt_server = "172.26.68.103";
 const int mqtt_port = 1883;
 
 WiFiClient espClient;
@@ -42,12 +43,16 @@ float readCurrentRMS() {
     }
     float rmsVoltage = sqrt(sumSquares / NUM_SAMPLES);
     float current = rmsVoltage * SCT_SCALE;
-    return abs(current);
+
+    // Filtro de ruído: Se a corrente for muito baixa, assume 0
+    if (current < CURRENT_THRESHOLD) {
+        current = 0;
+    }
+    return current;
 }
 
 // ---------------- TAREFAS (TASKS) ------------------------
 
-// Task 1: Lê o sensor continuamente (AGORA NO CORE 1)
 void taskReadCurrent(void *pvParameters) {
     SensorData data;
     while (true) {
@@ -57,7 +62,6 @@ void taskReadCurrent(void *pvParameters) {
     }
 }
 
-// Task 2: Analisa os dados (AGORA NO CORE 1)
 void taskDetectPower(void *pvParameters) {
     SensorData received;
     while (true) {
@@ -66,7 +70,6 @@ void taskDetectPower(void *pvParameters) {
             Serial.print(received.current);
             Serial.println(" A");
 
-            // DETECÇÃO DE STATUS
             if (received.current < CURRENT_THRESHOLD) {
                 Serial.println("⚠ POSSÍVEL CORTE DE ENERGIA!");
                 strcpy(received.status, "corte");
@@ -75,13 +78,11 @@ void taskDetectPower(void *pvParameters) {
                 strcpy(received.status, "normal");
             }
             Serial.println("-------------------------");
-
             xQueueSend(mqttQueue, &received, portMAX_DELAY);
         }
     }
 }
 
-// Task 3: Gerencia o Wi-Fi e publica no MQTT (AGORA NO CORE 0)
 void taskMQTT(void *pvParameters) {
     SensorData dataToSend;
     char jsonBuffer[100];
@@ -133,15 +134,27 @@ void setup() {
     analogReadResolution(12);
     analogSetAttenuation(ADC_11db);
 
+    // --- CALIBRAÇÃO AUTOMÁTICA ---
+    Serial.println("Calibrando sensor (certifique-se que não há carga)...");
+    double totalVoltage = 0;
+    for (int i = 0; i < 2000; i++) {
+        int adc = analogRead(SCT_PIN);
+        totalVoltage += (adc * ADC_VREF) / ADC_RESOLUTION;
+        delayMicroseconds(100);
+    }
+    ADC_OFFSET = totalVoltage / 2000.0;
+    Serial.print("Offset Calibrado: ");
+    Serial.println(ADC_OFFSET);
+    // -----------------------------
+
     client.setServer(mqtt_server, mqtt_port);
 
     currentQueue = xQueueCreate(5, sizeof(SensorData));
     mqttQueue = xQueueCreate(5, sizeof(SensorData));
 
-    // Inicialização das Tasks com a alocação de núcleos invertida
-    xTaskCreatePinnedToCore(taskReadCurrent, "ReadCurrent", 4096, NULL, 1, NULL, 1); // Core 1 (APP_CPU)
-    xTaskCreatePinnedToCore(taskDetectPower, "DetectPower", 4096, NULL, 1, NULL, 1); // Core 1 (APP_CPU)
-    xTaskCreatePinnedToCore(taskMQTT, "TaskMQTT", 4096, NULL, 1, NULL, 0);           // Core 0 (PRO_CPU)
+    xTaskCreatePinnedToCore(taskReadCurrent, "ReadCurrent", 4096, NULL, 1, NULL, 1);
+    xTaskCreatePinnedToCore(taskDetectPower, "DetectPower", 4096, NULL, 1, NULL, 1);
+    xTaskCreatePinnedToCore(taskMQTT, "TaskMQTT", 4096, NULL, 1, NULL, 0);
 }
 
 void loop() {
