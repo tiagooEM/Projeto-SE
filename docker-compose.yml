@@ -1,0 +1,26 @@
+version: '3.8'
+
+services:
+  mosquitto:
+    image: eclipse-mosquitto:latest
+    container_name: powerguard-mosquitto
+    ports:
+      - "1883:1883"
+      - "9002:9001"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
+    restart: always
+
+  node-red:
+    image: nodered/node-red:latest
+    container_name: powerguard-nodered
+    ports:
+      - "1880:1880" # Porta padrão para acessar o Node-RED no navegador
+    volumes:
+      - node-red-data:/data # Garante que seus fluxos e dashboards fiquem salvos permanentemente
+    depends_on:
+      - mosquitto
+    restart: always
+
+volumes:
+  node-red-data:
