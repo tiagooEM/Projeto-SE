@@ -1,19 +1,14 @@
 #include <Arduino.h>
-#include <math.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
-// ---------------- CONFIGURAÇÕES DO SENSOR ----------------
-#define SCT_PIN 34
-#define ADC_RESOLUTION 4095.0
-#define ADC_VREF 3.3
-#define NUM_SAMPLES 1000
-#define SCT_SCALE 20.0
-#define CURRENT_THRESHOLD 0.15
+// ---------------- CONFIGURAÇÕES DO SENSOR E LED ----------------
+const int sensorPin = 34; 
+const int ledPin = 2;     // Pino do LED
 
-float ADC_OFFSET = 1.65; // Será calibrado no setup
-
-// ---------------- CONFIGURAÇÕES REDE E MQTT --------------
+// ---------------- CONFIGURAÇÕES REDE E MQTT --------------------
 const char* ssid = "uaifai-tiradentes";
 const char* password = "bemvindoaocesar";
 const char* mqtt_server = "172.26.68.103";
@@ -22,72 +17,65 @@ const int mqtt_port = 1883;
 WiFiClient espClient;
 PubSubClient client(espClient);
 
-// ---------------- FILAS DO FREERTOS ----------------------
-QueueHandle_t currentQueue;
+// ---------------- FILAS DO FREERTOS ----------------------------
+QueueHandle_t sensorQueue;
 QueueHandle_t mqttQueue;
 
+// Estrutura simplificada para o dado do sensor
 typedef struct {
-    float current;
+    int leitura;
     char status[20];
 } SensorData;
 
-// ---------------- FUNÇÕES AUXILIARES ---------------------
-float readCurrentRMS() {
-    double sumSquares = 0;
-    for (int i = 0; i < NUM_SAMPLES; i++) {
-        int adc = analogRead(SCT_PIN);
-        float voltage = (adc * ADC_VREF) / ADC_RESOLUTION;
-        float centered = voltage - ADC_OFFSET;
-        sumSquares += centered * centered;
-        delayMicroseconds(200);
-    }
-    float rmsVoltage = sqrt(sumSquares / NUM_SAMPLES);
-    float current = rmsVoltage * SCT_SCALE;
+// ---------------- TAREFAS (TASKS) ------------------------------
 
-    // Filtro de ruído: Se a corrente for muito baixa, assume 0
-    if (current < CURRENT_THRESHOLD) {
-        current = 0;
-    }
-    return current;
-}
-
-// ---------------- TAREFAS (TASKS) ------------------------
-
-void taskReadCurrent(void *pvParameters) {
+// Tarefa 1: Apenas lê o sensor direto e joga na fila
+void taskReadSensor(void *pvParameters) {
     SensorData data;
     while (true) {
-        data.current = readCurrentRMS();
-        xQueueSend(currentQueue, &data, portMAX_DELAY);
-        vTaskDelay(pdMS_TO_TICKS(1000));
+        data.leitura = analogRead(sensorPin);
+        
+        // Envia para a próxima tarefa processar
+        xQueueSend(sensorQueue, &data, portMAX_DELAY);
+        
+        // Faz a leitura a cada 500ms para não floodar o broker MQTT
+        vTaskDelay(pdMS_TO_TICKS(500)); 
     }
 }
 
-void taskDetectPower(void *pvParameters) {
+// Tarefa 2: Avalia o valor, liga/desliga o LED e prepara para o MQTT
+void taskProcessData(void *pvParameters) {
     SensorData received;
     while (true) {
-        if (xQueueReceive(currentQueue, &received, portMAX_DELAY)) {
-            Serial.print("Corrente RMS: ");
-            Serial.print(received.current);
-            Serial.println(" A");
+        if (xQueueReceive(sensorQueue, &received, portMAX_DELAY)) {
+            
+            Serial.print("Leitura ADC: ");
+            Serial.println(received.leitura);
 
-            if (received.current < CURRENT_THRESHOLD) {
-                Serial.println("⚠ POSSÍVEL CORTE DE ENERGIA!");
-                strcpy(received.status, "corte");
+            // Lógica simples que você pediu (adapte o valor 500 se precisar)
+            if (received.leitura >= 500) {
+                digitalWrite(ledPin, HIGH); // Liga LED
+                strcpy(received.status, "ativo");
             } else {
-                Serial.println("✅ Energia OK");
-                strcpy(received.status, "normal");
+                digitalWrite(ledPin, LOW);  // Apaga LED
+                strcpy(received.status, "inativo");
             }
+
             Serial.println("-------------------------");
+            
+            // Envia o pacote pronto para a tarefa do MQTT publicar
             xQueueSend(mqttQueue, &received, portMAX_DELAY);
         }
     }
 }
 
+// Tarefa 3: Cuida exclusivamente do WiFi e do envio para o Mosquitto
 void taskMQTT(void *pvParameters) {
     SensorData dataToSend;
     char jsonBuffer[100];
 
     while (true) {
+        // Mantém o WiFi Conectado
         if (WiFi.status() != WL_CONNECTED) {
             Serial.print("Conectando ao WiFi...");
             WiFi.begin(ssid, password);
@@ -98,9 +86,10 @@ void taskMQTT(void *pvParameters) {
             Serial.println("\nWiFi Conectado!");
         }
 
+        // Mantém o Mosquitto Conectado
         if (!client.connected()) {
-            Serial.print("Conectando ao Broker MQTT...");
-            String clientId = "ESP32-PowerGuard-" + String(random(0xffff), HEX);
+            Serial.print("Conectando ao Mosquitto...");
+            String clientId = "ESP32-Sensor-" + String(random(0xffff), HEX);
             if (client.connect(clientId.c_str())) {
                 Serial.println(" Conectado!");
             } else {
@@ -113,10 +102,13 @@ void taskMQTT(void *pvParameters) {
         
         client.loop();
 
+        // Se tem dado processado na fila, publica no MQTT
         if (xQueueReceive(mqttQueue, &dataToSend, pdMS_TO_TICKS(100))) {
-            snprintf(jsonBuffer, sizeof(jsonBuffer), "{\"corrente\": %.2f, \"status\": \"%s\"}", 
-                     dataToSend.current, dataToSend.status);
+            // Monta o JSON com o valor lido e o status do LED
+            snprintf(jsonBuffer, sizeof(jsonBuffer), "{\"leitura_adc\": %d, \"status\": \"%s\"}", 
+                     dataToSend.leitura, dataToSend.status);
             
+            // Publica no tópico
             client.publish("powerguard/sensores", jsonBuffer);
             Serial.print("Publicado no MQTT: ");
             Serial.println(jsonBuffer);
@@ -126,36 +118,25 @@ void taskMQTT(void *pvParameters) {
     }
 }
 
-// ---------------- SETUP E LOOP ---------------------------
+// ---------------- SETUP E LOOP ---------------------------------
 
 void setup() {
     Serial.begin(115200);
+    pinMode(ledPin, OUTPUT);
 
-    analogReadResolution(12);
-    analogSetAttenuation(ADC_11db);
-
-    // --- CALIBRAÇÃO AUTOMÁTICA ---
-    Serial.println("Calibrando sensor (certifique-se que não há carga)...");
-    double totalVoltage = 0;
-    for (int i = 0; i < 2000; i++) {
-        int adc = analogRead(SCT_PIN);
-        totalVoltage += (adc * ADC_VREF) / ADC_RESOLUTION;
-        delayMicroseconds(100);
-    }
-    ADC_OFFSET = totalVoltage / 2000.0;
-    Serial.print("Offset Calibrado: ");
-    Serial.println(ADC_OFFSET);
-    // -----------------------------
-
+    // Configura o broker Mosquitto
     client.setServer(mqtt_server, mqtt_port);
 
-    currentQueue = xQueueCreate(5, sizeof(SensorData));
+    // Cria as filas de comunicação entre as tarefas
+    sensorQueue = xQueueCreate(5, sizeof(SensorData));
     mqttQueue = xQueueCreate(5, sizeof(SensorData));
 
-    xTaskCreatePinnedToCore(taskReadCurrent, "ReadCurrent", 4096, NULL, 1, NULL, 1);
-    xTaskCreatePinnedToCore(taskDetectPower, "DetectPower", 4096, NULL, 1, NULL, 1);
+    // Inicia as tarefas (distribuídas nos núcleos do ESP32 para não travar o WiFi)
+    xTaskCreatePinnedToCore(taskReadSensor, "ReadSensor", 4096, NULL, 1, NULL, 1);
+    xTaskCreatePinnedToCore(taskProcessData, "ProcessData", 4096, NULL, 1, NULL, 1);
     xTaskCreatePinnedToCore(taskMQTT, "TaskMQTT", 4096, NULL, 1, NULL, 0);
 }
 
 void loop() {
+    // Loop vazio, o FreeRTOS faz o trabalho
 }
