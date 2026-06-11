@@ -27,7 +27,6 @@ services:
       - influxdb-data:/var/lib/influxdb2
     restart: always
 
-  # 4. Dashboard Web em React
   frontend:
     build: ./applications/frontend
     container_name: powerguard-react
@@ -39,5 +38,16 @@ services:
       - mosquitto
     restart: always
 
+  esp32-flasher:
+    image: python:3.9-slim
+    container_name: powerguard-esp32-flasher
+    working_dir: /workspace
+    # Mapeia a pasta onde está o platformio.ini para dentro do container
+    volumes:
+      - ./esp32/firmware:/workspace
+    devices:
+      - "/dev/ttyACM0:/dev/ttyACM0"
+    # 2. Adicionamos o '--target upload' no comando
+    command: ["/bin/bash", "-c", "pip install -U platformio && pio run --target upload --environment esp32dev"]
 volumes:
   influxdb-data:
