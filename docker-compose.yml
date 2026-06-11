@@ -27,16 +27,6 @@ services:
       - influxdb-data:/var/lib/influxdb2
     restart: always
 
-  # 3. Simulador Python (Atualizado para gravar no Banco)
-  # simulador:
-  #   build: ./applications/simulador
-  #   container_name: powerguard-simulador
-  #   depends_on:
-  #     - mosquitto
-  #     - influxdb
-  #   restart: always
-
-  # 4. Dashboard Web em React
   frontend:
     build: ./applications/frontend
     container_name: powerguard-react
