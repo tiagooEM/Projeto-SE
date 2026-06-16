@@ -17,8 +17,8 @@ const TOPICO = 'powerguard/sensores';
 const BROKER_URL = 'ws://localhost:9002';
 const ID_PRIMARIO = 'PG-01';          // dispositivo alimentado pelo MQTT real
 const MAX_HISTORICO = 60;             // ~2 min de janela (leitura a cada 2s)
-const Y_MAX = 4095;                   // escala do eixo Y do gráfico (ADC)
-const LIMIAR_CORTE = 500;             // referência visual de corte (ADC)
+const Y_MAX = 700;                   // escala do eixo Y do gráfico (ADC) — ajustada para melhor visualização
+const LIMIAR_CORTE = 380;             // referência visual de corte (ADC)
 const INTERVALO_MS = 2000;            // mesma cadência do simulador.py
 
 // Pontos de monitoramento. Apenas PG-01 é "real" (vem do MQTT); o resto é
@@ -109,7 +109,7 @@ function Grafico({ history, corte }) {
   const n = history.length;
 
   const linhas = [];
-  for (let a = 0; a <= Y_MAX; a += 1000) {
+  for (let a = 0; a <= Y_MAX; a += 250) {
     const gy = y(a);
     linhas.push(
       <g key={a}>

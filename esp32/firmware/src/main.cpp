@@ -33,6 +33,15 @@ int bufferLeituras[TAMANHO_MEDIA] = {0};
 int indiceMedia = 0;
 int contadorMedia = 0;
 
+// Variáveis para controle de variação (amplitude)
+int minLeitura = 0;
+int maxLeitura = 0;
+int variacaoAtual = 0;
+
+// Limites de variação para histerese
+const int VARIACAO_LIGADO = 100;    // Se amplitude > 100, está ligado
+const int VARIACAO_DESLIGADO = 50;  // Se amplitude < 50, está desligado
+
 // ---------------- TAREFAS (TASKS) ------------------------------
 
 // Tarefa 1: Lê o sensor capturando leitura instantânea de corrente
@@ -56,7 +65,7 @@ void taskReadSensor(void *pvParameters) {
     }
 }
 
-// Tarefa 2: Calcula a média e aplica Histerese
+// Tarefa 2: Calcula a variação e aplica Histerese baseada em amplitude
 void taskCalcularMedia(void *pvParameters) {
     SensorData received;
     while (true) {
@@ -68,21 +77,29 @@ void taskCalcularMedia(void *pvParameters) {
             contadorMedia++;
             
             if (contadorMedia >= TAMANHO_MEDIA) {
+                // Calcula a variação (amplitude = máximo - mínimo)
+                minLeitura = bufferLeituras[0];
+                maxLeitura = bufferLeituras[0];
                 int soma = 0;
+                
                 for (int i = 0; i < TAMANHO_MEDIA; i++) {
                     soma += bufferLeituras[i];
+                    if (bufferLeituras[i] < minLeitura) minLeitura = bufferLeituras[i];
+                    if (bufferLeituras[i] > maxLeitura) maxLeitura = bufferLeituras[i];
                 }
+                
+                variacaoAtual = maxLeitura - minLeitura;
                 int mediaVariacao = soma / TAMANHO_MEDIA;
                 
-                // PENTE FINO 2: HISTERESE (Evita o efeito "pisca-pisca" no status)
-                // Se está ligado, precisa cair muito para considerarmos desligado (ex: abaixo de 300)
-                // Se está desligado, precisa subir muito para considerarmos ligado (ex: acima de 600)
+                // HISTERESE baseada na VARIAÇÃO (amplitude)
+                // Se está ligado, precisa cair muito para considerarmos desligado
+                // Se está desligado, precisa subir muito para considerarmos ligado
                 if (aparelhoLigado) {
-                    if (mediaVariacao < 300) { 
+                    if (variacaoAtual < VARIACAO_DESLIGADO) { 
                         aparelhoLigado = false;
                     }
                 } else {
-                    if (mediaVariacao > 600) {
+                    if (variacaoAtual > VARIACAO_LIGADO) {
                         aparelhoLigado = true;
                     }
                 }
@@ -95,12 +112,12 @@ void taskCalcularMedia(void *pvParameters) {
                     strcpy(received.status, "inativo");
                 }
 
-                received.leitura = mediaVariacao;
+                received.leitura = variacaoAtual; // Envia a variação em vez do valor absoluto
                 
-                // PENTE FINO 1 (Continuação): Envia para a fila do MQTT sem bloquear o sistema
+                // Envia para a fila do MQTT sem bloquear o sistema
                 xQueueSend(mqttQueue, &received, pdMS_TO_TICKS(10));
                 
-                // Reset seguro do contador, mantendo o buffer circular girando corretamente
+                // Reset seguro do contador
                 if (contadorMedia > TAMANHO_MEDIA * 2) {
                     contadorMedia = TAMANHO_MEDIA; 
                 }
@@ -109,13 +126,13 @@ void taskCalcularMedia(void *pvParameters) {
     }
 }
 
-// Tarefa 3: Print Independente
+// Tarefa 3: Print Independente com detalhes de variação
 void taskPrintStatus(void *pvParameters) {
     while (true) {
         if (aparelhoLigado) {
-            Serial.println("Status: LIGADO");
+            Serial.printf("Status: LIGADA | Variação: %d\n", variacaoAtual);
         } else {
-            Serial.println("Status: DESLIGADO");
+            Serial.printf("Status: DESLIGADA | Variação: %d\n", variacaoAtual);
         }
         vTaskDelay(pdMS_TO_TICKS(500)); 
     }
