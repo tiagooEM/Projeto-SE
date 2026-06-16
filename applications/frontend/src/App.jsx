@@ -4,38 +4,34 @@ import mqtt from 'mqtt';
 /* =============================================================================
  * PowerGuard — Centro de Operação da Rede
  * -----------------------------------------------------------------------------
- * Painel de monitoramento operacional de corrente elétrica.
+ * Painel de monitoramento operacional de leituras ADC.
  *
  * Fonte de dados:
  *   - O fluxo MQTT real (tópico "powerguard/sensores") alimenta o dispositivo
- *     primário (PG-01). O contrato é o mesmo do simulador: {corrente, status}.
+ *     primário (PG-01). O contrato é: {"leitura_adc": %d, "status": "%s"}.
  *   - Os demais pontos são SIMULADOS aqui no front, no mesmo formato, enquanto
  *     o hardware não está pronto.
- *
- * Compatível com o futuro: se o payload passar a incluir "device_id" (ou
- * "dispositivo"), a leitura é roteada para o dispositivo certo — e dispositivos
- * reais desconhecidos são criados automaticamente. Nada precisa mudar aqui.
  * ========================================================================== */
 
 const TOPICO = 'powerguard/sensores';
 const BROKER_URL = 'ws://localhost:9002';
 const ID_PRIMARIO = 'PG-01';          // dispositivo alimentado pelo MQTT real
 const MAX_HISTORICO = 60;             // ~2 min de janela (leitura a cada 2s)
-const Y_MAX = 5;                      // escala do eixo Y do gráfico (A)
-const LIMIAR_CORTE = 0.5;             // referência visual de corte (A)
+const Y_MAX = 4095;                   // escala do eixo Y do gráfico (ADC)
+const LIMIAR_CORTE = 500;             // referência visual de corte (ADC)
 const INTERVALO_MS = 2000;            // mesma cadência do simulador.py
 
 // Pontos de monitoramento. Apenas PG-01 é "real" (vem do MQTT); o resto é
-// simulado no mesmo formato. `base` = corrente nominal de cada ponto.
+// simulado no mesmo formato. `base` = leitura ADC nominal de cada ponto.
 const DISPOSITIVOS_INICIAIS = [
-  { id: 'PG-01', nome: 'Poste 01 — Sala Infra',      alimentador: 'AL-CENTRO-01', base: 3.5, real: true },
-  { id: 'PG-02', nome: 'Poste 02 — Av. Boa Viagem',  alimentador: 'AL-SUL-04',    base: 3.2, real: false },
-  { id: 'PG-03', nome: 'Poste 03 — Rua da Aurora',   alimentador: 'AL-CENTRO-02', base: 2.8, real: false },
-  { id: 'PG-04', nome: 'Poste 04 — Pina',            alimentador: 'AL-SUL-02',    base: 3.9, real: false },
-  { id: 'PG-05', nome: 'Poste 05 — Derby',           alimentador: 'AL-OESTE-01',  base: 3.1, real: false },
-  { id: 'PG-06', nome: 'Poste 06 — Casa Forte',      alimentador: 'AL-NORTE-03',  base: 2.6, real: false },
-  { id: 'PG-07', nome: 'Poste 07 — Espinheiro',      alimentador: 'AL-NORTE-01',  base: 3.6, real: false },
-  { id: 'PG-08', nome: 'Poste 08 — Boa Vista',       alimentador: 'AL-CENTRO-03', base: 3.3, real: false },
+  { id: 'PG-01', nome: 'Poste 01 — Sala Infra',      alimentador: 'AL-CENTRO-01', base: 2800, real: true },
+  { id: 'PG-02', nome: 'Poste 02 — Av. Boa Viagem',  alimentador: 'AL-SUL-04',    base: 3100, real: false },
+  { id: 'PG-03', nome: 'Poste 03 — Rua da Aurora',   alimentador: 'AL-CENTRO-02', base: 2600, real: false },
+  { id: 'PG-04', nome: 'Poste 04 — Pina',            alimentador: 'AL-SUL-02',    base: 3400, real: false },
+  { id: 'PG-05', nome: 'Poste 05 — Derby',           alimentador: 'AL-OESTE-01',  base: 2900, real: false },
+  { id: 'PG-06', nome: 'Poste 06 — Casa Forte',      alimentador: 'AL-NORTE-03',  base: 2500, real: false },
+  { id: 'PG-07', nome: 'Poste 07 — Espinheiro',      alimentador: 'AL-NORTE-01',  base: 3200, real: false },
+  { id: 'PG-08', nome: 'Poste 08 — Boa Vista',       alimentador: 'AL-CENTRO-03', base: 3000, real: false },
 ];
 
 // Paleta do painel (tema escuro estilo NOC / SCADA)
@@ -54,17 +50,17 @@ function leituraRuntime(d) {
   return { ...d, corrente: 0, status: 'normal', history: [], cortes: 0, online: false, ultima: null };
 }
 
-// Gera uma leitura simulada no MESMO formato do simulador.py.
+// Gera uma leitura simulada no formato ADC.
 function gerarLeitura(base) {
   if (Math.random() < 0.12) {
-    return { corrente: +(Math.random() * 0.1).toFixed(2), status: 'corte' };
+    return { corrente: Math.floor(Math.random() * 100), status: 'corte' };
   }
-  const ruido = (Math.random() - 0.5) * 0.5;
-  return { corrente: +Math.max(0, base + ruido).toFixed(2), status: 'normal' };
+  const ruido = (Math.random() - 0.5) * 200;
+  return { corrente: Math.floor(Math.max(0, base + ruido)), status: 'normal' };
 }
 
 function criarDispositivoDesconhecido(id) {
-  return leituraRuntime({ id, nome: `Dispositivo ${id}`, alimentador: '—', base: 3.5, real: true });
+  return leituraRuntime({ id, nome: `Dispositivo ${id}`, alimentador: '—', base: 2800, real: true });
 }
 
 function aplicarLeitura(d, leitura, agora) {
@@ -113,12 +109,12 @@ function Grafico({ history, corte }) {
   const n = history.length;
 
   const linhas = [];
-  for (let a = 0; a <= Y_MAX; a++) {
+  for (let a = 0; a <= Y_MAX; a += 1000) {
     const gy = y(a);
     linhas.push(
       <g key={a}>
         <line x1={pad} y1={gy} x2={W - pad} y2={gy} stroke={C.borda} strokeWidth="1" />
-        <text x={pad - 8} y={gy + 4} textAnchor="end" fontSize="11" fill={C.textoFraco2}>{a}A</text>
+        <text x={pad - 8} y={gy + 4} textAnchor="end" fontSize="11" fill={C.textoFraco2}>{a}</text>
       </g>
     );
   }
@@ -208,7 +204,7 @@ function CardDispositivo({ d, selecionado, onClick }) {
       </div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end' }}>
         <div style={{ fontSize: 22, fontWeight: 700, color: corte ? C.perigo : C.texto }}>
-          {d.corrente.toFixed(2)}<span style={{ fontSize: 12, color: C.textoFraco, marginLeft: 3 }}>A</span>
+          {d.corrente.toFixed(0)}<span style={{ fontSize: 12, color: C.textoFraco, marginLeft: 3 }}>ADC</span>
         </div>
         <Sparkline history={d.history} corte={corte} />
       </div>
@@ -271,7 +267,11 @@ function App() {
       try {
         const payload = JSON.parse(message.toString());
         const deviceId = payload.device_id || payload.dispositivo || ID_PRIMARIO;
-        registrarRef.current(deviceId, { corrente: Number(payload.corrente), status: payload.status });
+        // Mapeia leitura_adc para corrente e normaliza status (ativo -> normal, inativo -> corte)
+        registrarRef.current(deviceId, { 
+          corrente: Number(payload.leitura_adc), 
+          status: payload.status === 'inativo' ? 'corte' : 'normal' 
+        });
       } catch (e) {
         console.error('Payload MQTT inválido:', e);
       }
@@ -356,7 +356,7 @@ function App() {
               PowerGuard <span style={{ color: C.textoFraco, fontWeight: 400, fontSize: 14 }}>| Centro de Operação da Rede</span>
             </div>
             <div style={{ fontSize: 11, color: C.textoFraco2 }}>
-              Monitoramento de corrente elétrica em tempo real
+              Monitoramento de nível de sinal (ADC) em tempo real
             </div>
           </div>
         </div>
@@ -392,8 +392,8 @@ function App() {
           cor={emCorte.length ? C.perigo : C.ok}
           destaque={emCorte.length ? 'requer atenção' : 'rede estável'} />
         <Kpi label="Cortes na sessão" valor={totalCortes} cor={C.alerta} destaque="eventos acumulados" />
-        <Kpi label="Corrente média" valor={correnteMedia.toFixed(2)} unidade="A" destaque="pontos normais" />
-        <Kpi label="Carga total" valor={cargaTotal.toFixed(1)} unidade="A" destaque="soma instantânea" />
+        <Kpi label="Leitura média" valor={correnteMedia.toFixed(0)} unidade="ADC" destaque="pontos normais" />
+        <Kpi label="Soma total" valor={cargaTotal.toFixed(0)} unidade="ADC" destaque="soma instantânea" />
       </div>
 
       {/* ------------------------- grade principal ------------------------- */}
@@ -419,7 +419,7 @@ function App() {
         <section style={painel}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${C.borda}` }}>
             <h2 style={{ ...tituloPainel, borderBottom: 'none' }}>
-              Corrente RMS · {dispSel?.nome}
+              Leitura ADC · {dispSel?.nome}
             </h2>
             <div style={{ padding: '0 16px', fontSize: 12, color: C.textoFraco }}>
               {dispSel?.id} · {dispSel?.alimentador}
@@ -432,8 +432,8 @@ function App() {
                 fontSize: 44, fontWeight: 700, lineHeight: 1,
                 color: dispSel?.status === 'corte' ? C.perigo : C.texto,
               }}>
-                {dispSel ? dispSel.corrente.toFixed(2) : '0.00'}
-                <span style={{ fontSize: 18, color: C.textoFraco, marginLeft: 6 }}>A</span>
+                {dispSel ? dispSel.corrente.toFixed(0) : '0'}
+                <span style={{ fontSize: 18, color: C.textoFraco, marginLeft: 6 }}>ADC</span>
               </div>
               <span style={{
                 fontSize: 12, fontWeight: 700, padding: '5px 12px', borderRadius: 20,
@@ -447,7 +447,7 @@ function App() {
             <Grafico history={dispSel?.history || []} corte={dispSel?.status === 'corte'} />
             <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontSize: 11, color: C.textoFraco2 }}>
               <span>Janela: últimas {MAX_HISTORICO} leituras (~{Math.round(MAX_HISTORICO * INTERVALO_MS / 1000 / 60)} min)</span>
-              <span style={{ color: C.perigo }}>— — limiar de corte ({LIMIAR_CORTE.toFixed(1)} A)</span>
+              <span style={{ color: C.perigo }}>— — limiar de corte ({LIMIAR_CORTE})</span>
             </div>
           </div>
         </section>
